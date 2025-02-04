@@ -1,0 +1,9 @@
+flask
+flask-cors
+flask-session
+python-dotenv
+langchain-core
+langchain-community
+langchain-experimental
+langchain-anthropic
+langgraph
