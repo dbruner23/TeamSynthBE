@@ -57,6 +57,15 @@ async def create_agent():
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
+@app.route('/api/cancel', methods=['POST'])
+def cancel_task():
+    try:
+        session_id = get_session_id()
+        session_manager.cancel_task(session_id)
+        return jsonify({'message': 'Task cancellation requested'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/execute', methods=['POST'])
 async def execute_task():
     try:
@@ -69,14 +78,23 @@ async def execute_task():
 
         def generate():
             graph_manager = session_manager.get_or_create_manager(session_id)
+            session_manager.start_task(session_id)
+
             def stream_results():
                 async def async_generator():
-                    async for step in graph_manager.execute_task(task):
-                        # Print step information to terminal
-                        print(f"\n[{step['timestamp']}] Agent {step['agent']}:")
-                        print(f"{step['content']}\n")
-                        print("-" * 80)  # Separator line
-                        yield f"data: {json.dumps(step)}\n\n"
+                    try:
+                        async for step in graph_manager.execute_task(task, session_id):
+                            if not session_manager.is_task_active(session_id):
+                                yield f"data: {json.dumps({'agent': 'system', 'content': 'Task cancelled', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                                break
+                            print(f"\n[{step['timestamp']}] Agent {step['agent']}:")
+                            print(f"{step['content']}\n")
+                            print("-" * 80)
+                            yield f"data: {json.dumps(step)}\n\n"
+                    except Exception as e:
+                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                    finally:
+                        session_manager.cancel_task(session_id)
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)

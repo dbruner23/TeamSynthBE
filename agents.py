@@ -11,10 +11,11 @@ from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 from langchain_experimental.utilities import PythonREPL
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import create_react_agent
-from langgraph.types import Command
 from dotenv import load_dotenv
 import os
 from pydantic import BaseModel
+from typing import Literal
+from langgraph.types import Command
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -190,7 +191,7 @@ class AgentGraphManager:
 
     def _create_supervisor_node(self, agent: Agent):
         """Create the supervisor node function."""
-        def supervisor_node(state: MessagesState) -> Dict:
+        def supervisor_node(state: MessagesState) -> Command:
             try:
                 combined_prompt = f"""{agent.system_prompt}
 
@@ -206,26 +207,29 @@ class AgentGraphManager:
                 next_agent = response.next
                 reasoning = response.reasoning
 
-                # Add supervisor's reasoning to the message chain
-                return {
-                    "messages": [
-                        HumanMessage(
-                            content=f"Supervisor decision: {reasoning}",
-                            name="supervisor"
-                        )
-                    ],
-                    "goto": END if next_agent == "END" else next_agent
-                }
+                return Command(
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content=f"Supervisor decision: {reasoning}",
+                                name="supervisor"
+                            )
+                        ]
+                    },
+                    goto=END if next_agent == "END" else next_agent
+                )
             except Exception as e:
-                return {
-                    "messages": [
-                        HumanMessage(
-                            content=f"Supervisor error: {str(e)}",
-                            name="supervisor"
-                        )
-                    ],
-                    "goto": END
-                }
+                return Command(
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content=f"Supervisor error: {str(e)}",
+                                name="supervisor"
+                            )
+                        ]
+                    },
+                    goto=END
+                )
 
         return supervisor_node
 
@@ -240,29 +244,33 @@ class AgentGraphManager:
             state_modifier=agent.system_prompt
         )
 
-        def node_func(state: MessagesState) -> Dict:
+        def node_func(state: MessagesState) -> Command:
             try:
                 result = base_agent.invoke(state)
-                return {
-                    "messages": [
-                        HumanMessage(
-                            content=result["messages"][-1].content,
-                            name=agent.id
-                        )
-                    ],
-                    # Default to supervisor if it exists, otherwise END
-                    "goto": self._get_next_node(agent.id)
-                }
+                next_node = self._get_next_node(agent.id)
+                return Command(
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content=result["messages"][-1].content,
+                                name=agent.id
+                            )
+                        ]
+                    },
+                    goto=next_node
+                )
             except Exception as e:
-                return {
-                    "messages": [
-                        HumanMessage(
-                            content=f"Error in agent {agent.id}: {str(e)}",
-                            name=agent.id
-                        )
-                    ],
-                    "goto": END
-                }
+                return Command(
+                    update={
+                        "messages": [
+                            HumanMessage(
+                                content=f"Error in agent {agent.id}: {str(e)}",
+                                name=agent.id
+                            )
+                        ]
+                    },
+                    goto=END
+                )
 
         return node_func
 
@@ -282,6 +290,11 @@ class AgentGraphManager:
         """Rebuild the entire graph based on current agents and relationships."""
         builder = StateGraph(MessagesState)
 
+        # Add initial edge from START to supervisor if it exists
+        supervisor = self._get_supervisor()
+        if supervisor:
+            builder.add_edge(START, supervisor.id)
+
         # Add all agents as nodes
         for agent_id, agent in self.agents.items():
             builder.add_node(agent_id, self._create_agent_node(agent))
@@ -289,29 +302,29 @@ class AgentGraphManager:
         # Add edges based on relationships
         for agent in self.agents.values():
             for rel in agent.relationships:
-                if rel.relation_type in [RelationType.REPORTS_TO, RelationType.SUPERVISES]:
-                    builder.add_edge(rel.from_agent, rel.to_agent)
-                elif rel.relation_type == RelationType.COLLABORATES:
-                    # For collaboration, add bidirectional edges
-                    builder.add_edge(rel.from_agent, rel.to_agent)
-                    builder.add_edge(rel.to_agent, rel.from_agent)
-
-        # Add START edge to entry points (agents with no incoming edges)
-        for agent_id in self.agents:
-            if not any(rel.to_agent == agent_id for a in self.agents.values() for rel in a.relationships):
-                builder.add_edge(START, agent_id)
+                builder.add_edge(rel.from_agent, rel.to_agent)
 
         self.graph = builder.compile()
 
-    async def execute_task(self, task: str):
+    async def execute_task(self, task: str, session_id: str):
         """Execute a task using the current graph."""
         if not self.graph:
             raise ValueError("No agent graph has been built yet")
+
+        print(f"\n[DEBUG] Starting new task execution: {task}\n")
 
         async for event in self.graph.astream(
             {"messages": [("user", task)]},
             stream_mode="values",
         ):
+            # Get session manager instance
+            from session_manager import SessionManager
+            session_manager = SessionManager()
+
+            # Check if task was cancelled
+            # if not session_manager.is_task_active(session_id):
+            #     break
+
             # Format the step data
             if "messages" in event and event["messages"]:
                 last_message = event["messages"][-1]
@@ -320,4 +333,5 @@ class AgentGraphManager:
                     "content": last_message.content,
                     "timestamp": datetime.datetime.now().isoformat()
                 }
+                print(f"[DEBUG] Formatted step data: {step_data}\n")
                 yield step_data

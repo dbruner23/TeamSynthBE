@@ -10,11 +10,9 @@
         "FLASK_APP": "app.py",
         "FLASK_ENV": "development"
       },
-      "args": [
-        "run",
-        "--no-reload" // Disable auto-reload for debugging
-      ],
-      "jinja": true
+      "args": ["run"],
+      "jinja": true,
+      "console": "integratedTerminal" // Add this line to see output in terminal
     }
   ]
 }

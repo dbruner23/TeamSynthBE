@@ -10,6 +10,7 @@ class SessionManager:
         self.graph_managers: Dict[str, AgentGraphManager] = {}
         self.session_timeout = session_timeout  # timeout in seconds
         self.last_accessed: Dict[str, datetime] = {}
+        self.active_tasks: Dict[str, bool] = {}  # Track active tasks by session_id
 
     def get_or_create_manager(self, session_id: str) -> AgentGraphManager:
         """Get an existing graph manager or create a new one for the session."""
@@ -37,3 +38,15 @@ class SessionManager:
         """Explicitly remove a session."""
         self.graph_managers.pop(session_id, None)
         self.last_accessed.pop(session_id, None)
+
+    def cancel_task(self, session_id: str):
+        """Cancel an active task for the session."""
+        self.active_tasks[session_id] = False
+
+    def start_task(self, session_id: str):
+        """Start a task for the session."""
+        self.active_tasks[session_id] = True
+
+    def is_task_active(self, session_id: str) -> bool:
+        """Check if a task is active for the session."""
+        return self.active_tasks.get(session_id, False)
