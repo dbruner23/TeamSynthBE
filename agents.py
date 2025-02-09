@@ -1,10 +1,10 @@
 import datetime
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Annotated
+from typing import Dict, List, Optional, Annotated, Literal
 from typing_extensions import TypedDict
 from enum import Enum
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_anthropic import ChatAnthropic
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing import Literal
 from langgraph.types import Command
 
+from helpers import extract_code_blocks
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 WOLFRAM_ALPHA_APPID = os.getenv("WOLFRAM_ALPHA_APPID")
@@ -29,17 +30,24 @@ def python_repl_tool(code: Annotated[str, "Python code to execute."]):
     you should print it out with `print(...)`. This is visible to the user."""
     try:
         result = repl.run(code)
+        # Return both code and output as structured response
+        return {
+            "type": "code",
+            "content": f"```python\n{code}\n```\nOutput:\n{result}"
+        }
     except BaseException as e:
         return f"Failed to execute. Error: {repr(e)}"
-    result_str = f"Successfully executed:\n\`\`\`python\n{code}\n\`\`\`\nStdout: {result}"
-    return result_str
 
 @tool
 def plot_data_tool(code: Annotated[str, "Python code to generate plots using matplotlib or seaborn"]):
     """Use this to create data visualizations. The code should use matplotlib or seaborn."""
     try:
         result = repl.run(code)
-        return "Plot generated successfully"
+        # Return plot code as structured response
+        return {
+            "type": "plot",
+            "content": code  # Frontend can re-execute to display
+        }
     except Exception as e:
         return f"Failed to generate plot: {str(e)}"
 
@@ -62,6 +70,11 @@ class RelationType(str, Enum):
     SUPERVISES = "supervises"
     REPORTS_TO = "reports_to"
     COLLABORATES = "collaborates_with"
+
+class ArtifactState(TypedDict):
+    type: Literal["code", "plot", "output"]
+    content: str
+    timestamp: str
 
 class SupervisorResponse(BaseModel):
     next: str
@@ -102,6 +115,7 @@ class AgentGraphManager:
     def __init__(self):
         self.agents: Dict[str, Agent] = {}
         self.graph = None
+        self.members: List[str] = []  # Track non-supervisor agents
         self.llm = ChatAnthropic(
             model_name="claude-3-5-sonnet-latest",
             api_key=ANTHROPIC_API_KEY,
@@ -135,6 +149,10 @@ class AgentGraphManager:
                 # Remove old supervisor
                 del self.agents[existing_supervisor.id]
         else:
+            # Add to members list if not supervisor
+            if agent.id not in self.members:
+                self.members.append(agent.id)
+
             # If this is not a supervisor and has no relationships, create default relationship
             if not agent.relationships:
                 supervisor = self._get_supervisor()
@@ -173,56 +191,90 @@ class AgentGraphManager:
                    f"\n  Tools: {', '.join(tools) if tools else 'None'}")
             agent_descriptions.append(desc)
 
-        self.team_info = f"""Available agents:
-        {chr(10).join(agent_descriptions)}
+        self.team_info = f"""You are the supervisor agent. Your ONLY role is to evaluate task completion and agent selection.
 
-        For each interaction:
-        1. Analyze the current state and messages
-        2. Decide which agent should act next based on their capabilities and the task needs
-        3. Return your decision as a structured response with:
-        - 'next': The ID of the next agent to act (or 'END' if task is complete)
-        - 'reasoning': Brief explanation of your choice
+CRITICAL RULES - YOU MUST FOLLOW THESE EXACTLY:
+1. You MUST return 'END' if ANY of these occur:
+   - An agent returns an empty response
+   - The same information has been repeated
+   - An adequate answer has been provided
+   - 3 or more exchanges occur without new information
+   - Agents start asking open-ended follow-up questions
 
-        Consider each agent's:
-        - Specialization (agent_type)
-        - Available tools
-        - System prompt
-        - Previous contributions to the task"""
+2. You MUST NOT:
+   - Suggest next steps if the task is complete
+   - Continue the conversation after a clear answer
+   - Ignore empty responses from agents
+   - Allow repetitive cycles of similar responses
+
+Available Team Members:
+{chr(10).join(agent_descriptions)}
+
+For each interaction:
+1. Check FIRST if any termination conditions are met
+2. Only if no termination conditions are met, select the next most appropriate agent
+3. Return your decision as:
+   'next': Either 'END' or an agent ID"""
+
+
 
     def _create_supervisor_node(self, agent: Agent):
         """Create the supervisor node function."""
         def supervisor_node(state: MessagesState) -> Command:
             try:
+                # Extract the last agent response if it exists
+                # last_message = state["messages"][-1] if state["messages"] else None
+                # last_agent = last_message.name if (isinstance(last_message, AIMessage) and hasattr(last_message, 'name')) else None
+
+                # Add context about previous agent actions to prompt
+                # context = ""
+                # if last_agent:
+                #     context = f"\nLast agent to respond: {last_agent}\nTheir response is in the message history."
+
                 combined_prompt = f"""{agent.system_prompt}
 
                 Team Information:
                 {self.team_info}"""
 
                 messages = [
-                    SystemMessage(content=combined_prompt)
+                    SystemMessage(content=combined_prompt),
                 ] + state["messages"]
+
+                print(f"\n[DEBUG] MESSAGES TO SUPERVISOR: {messages}\n")
+                # print(f"\n[DEBUG] PROMPT TO SUPERVISOR: \n{combined_prompt}\n")
+                # print(f"\n[DEBUG] MESSAGES TO SUPERVISOR: \n{messages}\n")
+                options = self.members + ["END"]
+                class SupervisorResponse(BaseModel):
+                    next: Literal[*options]
+                    # reasoning: str
 
                 response = self.llm.with_structured_output(SupervisorResponse).invoke(messages)
 
-                next_agent = response.next
-                reasoning = response.reasoning
+                print(f"\n[DEBUG] SUPERVISOR RESPONSE: {response}\n")
+                # reasoning = response.reasoning
 
+                # If END, mark completed and don't schedule new tasks
+                if response.next == "END":
+                    return Command(
+                        update={
+                            "messages": [AIMessage(content="Task complete", name="supervisor")],
+                        }
+                    )
+
+                # Otherwise route to next agent
                 return Command(
                     update={
                         "messages": [
-                            HumanMessage(
-                                content=f"Supervisor decision: {reasoning}",
-                                name="supervisor"
-                            )
+                            AIMessage(content=f"Routing to: {response.next}", name="supervisor")
                         ]
                     },
-                    goto=END if next_agent == "END" else next_agent
+                    goto=response.next
                 )
             except Exception as e:
                 return Command(
                     update={
                         "messages": [
-                            HumanMessage(
+                            AIMessage(
                                 content=f"Supervisor error: {str(e)}",
                                 name="supervisor"
                             )
@@ -246,14 +298,18 @@ class AgentGraphManager:
 
         def node_func(state: MessagesState) -> Command:
             try:
+                print(f"\n[DEBUG] STATE PROMPT FOR AGENT: {state}\n")
                 result = base_agent.invoke(state)
+                print(f"\n[DEBUG] AGENT RESULT: {result}\n")
+
                 next_node = self._get_next_node(agent.id)
+                print(f"\n[DEBUG] AGENT NEXT NODE: {next_node}\n")
                 return Command(
                     update={
                         "messages": [
-                            HumanMessage(
+                            AIMessage(
                                 content=result["messages"][-1].content,
-                                name=agent.id
+                                name=agent.agent_type.value
                             )
                         ]
                     },
@@ -263,9 +319,9 @@ class AgentGraphManager:
                 return Command(
                     update={
                         "messages": [
-                            HumanMessage(
+                            AIMessage(
                                 content=f"Error in agent {agent.id}: {str(e)}",
-                                name=agent.id
+                                name=agent.agent_type.value
                             )
                         ]
                     },
@@ -290,19 +346,20 @@ class AgentGraphManager:
         """Rebuild the entire graph based on current agents and relationships."""
         builder = StateGraph(MessagesState)
 
-        # Add initial edge from START to supervisor if it exists
-        supervisor = self._get_supervisor()
-        if supervisor:
-            builder.add_edge(START, supervisor.id)
-
-        # Add all agents as nodes
+        # Add nodes for all agents
         for agent_id, agent in self.agents.items():
             builder.add_node(agent_id, self._create_agent_node(agent))
 
-        # Add edges based on relationships
-        for agent in self.agents.values():
-            for rel in agent.relationships:
-                builder.add_edge(rel.from_agent, rel.to_agent)
+        supervisor = self._get_supervisor()
+        if supervisor:
+            # Start -> Supervisor
+            builder.add_edge(START, supervisor.id)
+
+            # Supervisor -> Members
+            # for member_id in self.members:
+            #     builder.add_edge(supervisor.id, member_id)
+            #     # Member -> Supervisor (for reporting back)
+            #     builder.add_edge(member_id, supervisor.id)
 
         self.graph = builder.compile()
 
@@ -315,8 +372,11 @@ class AgentGraphManager:
 
         async for event in self.graph.astream(
             {"messages": [("user", task)]},
-            stream_mode="values",
+            stream_mode=["values", "debug"],
+            debug=True
         ):
+            # print(f"\n[DEBUG] EVENT: {event}\n")
+
             # Get session manager instance
             from session_manager import SessionManager
             session_manager = SessionManager()
@@ -333,5 +393,5 @@ class AgentGraphManager:
                     "content": last_message.content,
                     "timestamp": datetime.datetime.now().isoformat()
                 }
-                print(f"[DEBUG] Formatted step data: {step_data}\n")
+                # print(f"[DEBUG] Formatted step data: {step_data}\n")
                 yield step_data
