@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Annotated, Literal
 from typing_extensions import TypedDict
 from enum import Enum
 from langchain_core.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 from langchain_anthropic import ChatAnthropic
 from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
@@ -17,7 +17,9 @@ from pydantic import BaseModel
 from typing import Literal
 from langgraph.types import Command
 
-from helpers import extract_code_blocks
+from helpers import parse_ai_message
+from prompts import get_data_scientist_prompt  # Add import at top with other imports
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 WOLFRAM_ALPHA_APPID = os.getenv("WOLFRAM_ALPHA_APPID")
@@ -122,6 +124,7 @@ class AgentGraphManager:
             timeout=None,
             stop=None
         )
+        self.current_parsed_data = None  # Add this line to track latest parsed data
 
     def _get_supervisor(self) -> Optional[Agent]:
         """Find and return the supervisor agent if it exists."""
@@ -240,7 +243,7 @@ For each interaction:
                     SystemMessage(content=combined_prompt),
                 ] + state["messages"]
 
-                print(f"\n[DEBUG] MESSAGES TO SUPERVISOR: {messages}\n")
+                # print(f"\n[DEBUG] MESSAGES TO SUPERVISOR: {messages}\n")
                 # print(f"\n[DEBUG] PROMPT TO SUPERVISOR: \n{combined_prompt}\n")
                 # print(f"\n[DEBUG] MESSAGES TO SUPERVISOR: \n{messages}\n")
                 options = self.members + ["END"]
@@ -290,6 +293,12 @@ For each interaction:
         if agent.agent_type == AgentType.SUPERVISOR:
             return self._create_supervisor_node(agent)
 
+        # Add custom prompt for data scientist
+        if agent.agent_type == AgentType.DATA_SCIENTIST:
+            agent.system_prompt = get_data_scientist_prompt(agent.tools, agent.system_prompt)
+
+        # print(f"\n[DEBUG] {agent.agent_type} SYSTEM PROMPT: {agent.system_prompt}\n")
+
         base_agent = create_react_agent(
             self.llm,
             tools=agent.tools,
@@ -298,12 +307,38 @@ For each interaction:
 
         def node_func(state: MessagesState) -> Command:
             try:
-                print(f"\n[DEBUG] STATE PROMPT FOR AGENT: {state}\n")
+                # print(f"\n[DEBUG] STATE PROMPT FOR AGENT: {state}\n")
                 result = base_agent.invoke(state)
                 print(f"\n[DEBUG] AGENT RESULT: {result}\n")
 
+                # Find all messages since the last routing command
+                all_messages = result["messages"]
+                last_routing_idx = -1
+                for i, msg in enumerate(reversed(all_messages)):
+                    idx = len(all_messages) - 1 - i
+                    if (isinstance(msg, AIMessage) and
+                        hasattr(msg, 'content') and
+                        isinstance(msg.content, str) and
+                        msg.content.startswith('Routing to:')):
+                        last_routing_idx = idx
+                        break
+
+                # Get all messages after the last routing command
+                new_messages = all_messages[last_routing_idx + 1:]
+
+                # Parse each new message
+                parsed_messages = []
+                for msg in new_messages:
+                    if isinstance(msg, AIMessage):
+                        parsed_data = parse_ai_message(msg)
+                        parsed_messages.append(parsed_data)
+
+                # Store parsed message in manager instance
+                self.current_parsed_data = parsed_messages
+                print(f"\n[DEBUG] PARSED DATA: {self.current_parsed_data}\n")
+
                 next_node = self._get_next_node(agent.id)
-                print(f"\n[DEBUG] AGENT NEXT NODE: {next_node}\n")
+
                 return Command(
                     update={
                         "messages": [
@@ -355,12 +390,6 @@ For each interaction:
             # Start -> Supervisor
             builder.add_edge(START, supervisor.id)
 
-            # Supervisor -> Members
-            # for member_id in self.members:
-            #     builder.add_edge(supervisor.id, member_id)
-            #     # Member -> Supervisor (for reporting back)
-            #     builder.add_edge(member_id, supervisor.id)
-
         self.graph = builder.compile()
 
     async def execute_task(self, task: str, session_id: str):
@@ -368,30 +397,37 @@ For each interaction:
         if not self.graph:
             raise ValueError("No agent graph has been built yet")
 
-        print(f"\n[DEBUG] Starting new task execution: {task}\n")
+        try:
+            async for event in self.graph.astream(
+                {"messages": [HumanMessage(content=task)]},
+                stream_mode=["values", "debug"],
+                debug=True
+            ):
+                print(f"\n[DEBUG] EVENT: {event}\n")
 
-        async for event in self.graph.astream(
-            {"messages": [("user", task)]},
-            stream_mode=["values", "debug"],
-            debug=True
-        ):
-            # print(f"\n[DEBUG] EVENT: {event}\n")
+                # Handle tuple structure of events
+                event_type, event_data = event
 
-            # Get session manager instance
-            from session_manager import SessionManager
-            session_manager = SessionManager()
+                if event_type == "values" and event_data.get("messages"):
+                    messages = event_data["messages"]
+                    if messages:
+                        step_data = {
+                            "agent": messages[-1].name if hasattr(messages[-1], 'name') else "system",
+                            "content": messages[-1].content,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                            "parsed_data": self.current_parsed_data
+                        }
 
-            # Check if task was cancelled
-            # if not session_manager.is_task_active(session_id):
-            #     break
+                        print(f"[DEBUG] Yielding step data: {step_data}")
+                        yield step_data
+                        self.current_parsed_data = None  # Reset after yielding
 
-            # Format the step data
-            if "messages" in event and event["messages"]:
-                last_message = event["messages"][-1]
-                step_data = {
-                    "agent": last_message.name if hasattr(last_message, 'name') else "system",
-                    "content": last_message.content,
-                    "timestamp": datetime.datetime.now().isoformat()
-                }
-                # print(f"[DEBUG] Formatted step data: {step_data}\n")
-                yield step_data
+        except Exception as e:
+            error_data = {
+                "agent": "system",
+                "content": f"Error during task execution: {str(e)}",
+                "timestamp": datetime.datetime.now().isoformat(),
+                "parsed_data": None
+            }
+            yield error_data
+            raise

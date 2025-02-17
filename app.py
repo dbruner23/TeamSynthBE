@@ -13,6 +13,10 @@ from langchain_anthropic import ChatAnthropic
 load_dotenv()
 
 app = Flask(__name__)
+app.config['DEBUG'] = True
+app.config['PROPAGATE_EXCEPTIONS'] = True
+# Enable full error reporting
+app.config['FLASK_DEBUG'] = 1
 CORS(app)
 
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24))
@@ -155,4 +159,4 @@ def set_api_key():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=True)
