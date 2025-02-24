@@ -1,5 +1,10 @@
 from typing import List
 import json
+import io
+import base64
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+import matplotlib.pyplot as plt
+
 
 def parse_ai_message(message):
     """
@@ -17,6 +22,7 @@ def parse_ai_message(message):
         'content': [],
         'code_blocks': [],
         'tool_calls': [],
+        'plots': [],  # New field for plot data
         'metadata': {
             'model': message.response_metadata.get('model'),
             'stop_reason': message.response_metadata.get('stop_reason'),
@@ -62,6 +68,46 @@ def parse_ai_message(message):
                     'language': 'python',  # Assuming Python for now
                     'code': tool_call['args']['code']
                 })
+
+            # Handle plot data tool calls
+            if tool_call.get('tool_name') == 'plot_data_tool' and 'input' in tool_call.get('args', {}):
+                try:
+                    # Create a new figure for this plot
+                    plt.figure()
+
+                    # Get the plot code
+                    plot_code = tool_call['args']['input'].get('code', '')
+
+                    # Execute the plot code in a local namespace to avoid conflicts
+                    local_ns = {}
+                    exec(plot_code, globals(), local_ns)
+
+                    # Save the plot to a bytes buffer
+                    buffer = io.BytesIO()
+                    plt.savefig(buffer, format='png', bbox_inches='tight')
+                    buffer.seek(0)
+
+                    # Convert to base64
+                    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+                    # Add plot data to the response
+                    parsed_message['plots'].append({
+                        'image_data': image_base64,
+                        'format': 'png',
+                        'tool_id': tool_call.get('id'),
+                    })
+
+                    # Clean up
+                    plt.close()
+                    buffer.close()
+                except Exception as e:
+                    print(f"Error generating plot: {str(e)}")
+                    # Add error information to the plots array
+                    parsed_message['plots'].append({
+                        'error': str(e),
+                        'tool_id': tool_call.get('id')
+                    })
+
             parsed_message['tool_calls'].append({
                 'tool_name': tool_call.get('name'),
                 'tool_id': tool_call.get('id'),

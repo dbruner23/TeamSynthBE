@@ -55,7 +55,7 @@ async def create_agent():
         return jsonify({
             'id': agent.id,
             'agent_type': agent.agent_type,
-            'system_prompt': agent.system_prompt,
+            'system_prompt': data["system_prompt"],
             'relationships': [vars(rel) for rel in agent.relationships],
             'session_id': session_id  # Return the session ID to the client
         })

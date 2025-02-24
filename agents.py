@@ -18,7 +18,7 @@ from typing import Literal
 from langgraph.types import Command
 
 from helpers import parse_ai_message
-from prompts import get_data_scientist_prompt  # Add import at top with other imports
+from prompts import get_data_scientist_prompt, get_coder_prompt  # Add import at top with other imports
 
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
@@ -44,7 +44,6 @@ def python_repl_tool(code: Annotated[str, "Python code to execute."]):
 def plot_data_tool(code: Annotated[str, "Python code to generate plots using matplotlib or seaborn"]):
     """Use this to create data visualizations. The code should use matplotlib or seaborn."""
     try:
-        result = repl.run(code)
         # Return plot code as structured response
         return {
             "type": "plot",
@@ -59,6 +58,14 @@ def stem_expert_tool(question: Annotated[str, "Question to ask the STEM expert"]
     wolfram = WolframAlphaAPIWrapper()
     response = wolfram.run(question)
     return response
+
+@tool
+def publish_code_tool(code: Annotated[str, "Python code to publish"]):
+    """Use this to publish code that is ready to run."""
+    return {
+        "type": "code",
+        "content": code
+    }
 
 class AgentType(str, Enum):
     SUPERVISOR = "supervisor"
@@ -104,11 +111,11 @@ class Agent:
         if self.agent_type == AgentType.WEB_RESEARCHER:
             return [TavilySearchResults(max_results=5)]
         elif self.agent_type == AgentType.CODER:
-            return [python_repl_tool]  # Add coding-specific tools
+            return [publish_code_tool]  # Add coding-specific tools
         elif self.agent_type == AgentType.DATA_SCIENTIST:
-            return [python_repl_tool, plot_data_tool]
+            return [plot_data_tool]
         elif self.agent_type == AgentType.STEM_EXPERT:
-            return [stem_expert_tool, TavilySearchResults(max_results=5), python_repl_tool]
+            return [stem_expert_tool, TavilySearchResults(max_results=5), plot_data_tool]
         elif self.agent_type == AgentType.WRITER:
             return []  # Add writing-specific tools
         return []
@@ -253,11 +260,16 @@ For each interaction:
 
                 response = self.llm.with_structured_output(SupervisorResponse).invoke(messages)
 
+                parsed_data = {}
+
                 print(f"\n[DEBUG] SUPERVISOR RESPONSE: {response}\n")
                 # reasoning = response.reasoning
 
                 # If END, mark completed and don't schedule new tasks
                 if response.next == "END":
+                    parsed_data = { 'id': '', 'type': 'ai_message', 'content': [{"type": "text", "text": "Task complete"}], 'code_blocks': [], 'tool_calls': [], 'metadata': { 'model': '', 'stop_reason': '', 'usage': {} } }
+                    self.current_parsed_data = [parsed_data]
+
                     return Command(
                         update={
                             "messages": [AIMessage(content="Task complete", name="supervisor")],
@@ -265,7 +277,10 @@ For each interaction:
                     )
 
                 # Otherwise route to next agent
+                parsed_data = { 'id': '', 'type': 'ai_message', 'content': [{"type": "text", "text":f"Routing to: {response.next}"}], 'code_blocks': [], 'tool_calls': [], 'metadata': { 'model': '', 'stop_reason': '', 'usage': {} } }
+                self.current_parsed_data = [parsed_data]
                 return Command(
+
                     update={
                         "messages": [
                             AIMessage(content=f"Routing to: {response.next}", name="supervisor")
@@ -296,6 +311,9 @@ For each interaction:
         # Add custom prompt for data scientist
         if agent.agent_type == AgentType.DATA_SCIENTIST:
             agent.system_prompt = get_data_scientist_prompt(agent.tools, agent.system_prompt)
+        if agent.agent_type == AgentType.CODER:
+            agent.system_prompt = get_coder_prompt(agent.tools, agent.system_prompt)
+
 
         # print(f"\n[DEBUG] {agent.agent_type} SYSTEM PROMPT: {agent.system_prompt}\n")
 
@@ -337,13 +355,24 @@ For each interaction:
                 self.current_parsed_data = parsed_messages
                 print(f"\n[DEBUG] PARSED DATA: {self.current_parsed_data}\n")
 
+                # Get the original content
+                last_message = result["messages"][-1]
+                content = last_message.content
+
+                # Go through the parsed_data and get the first code_blocks entry if it exists to add to content
+                for parsed_data in parsed_messages:
+                    if parsed_data.get("code_blocks"):
+                        content += f"Generated code:\n\n```python\n{parsed_data['code_blocks'][0]['code']}\n```"
+                        break
+
+
                 next_node = self._get_next_node(agent.id)
 
                 return Command(
                     update={
                         "messages": [
                             AIMessage(
-                                content=result["messages"][-1].content,
+                                content=content,
                                 name=agent.agent_type.value
                             )
                         ]
