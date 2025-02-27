@@ -17,7 +17,7 @@ app.config['DEBUG'] = True
 app.config['PROPAGATE_EXCEPTIONS'] = True
 # Enable full error reporting
 app.config['FLASK_DEBUG'] = 1
-CORS(app)
+CORS(app, origins=["http://localhost:4300", "http://localhost:5173"])
 
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24))
 session_manager = SessionManager()
@@ -67,7 +67,11 @@ def cancel_task():
     try:
         session_id = get_session_id()
         session_manager.cancel_task(session_id)
-        return jsonify({'message': 'Task cancellation requested'})
+        return jsonify({
+            'agent': 'system',
+            'content': 'Task cancelled',
+            'timestamp': datetime.datetime.now().isoformat()
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
