@@ -10,7 +10,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 from langchain_experimental.utilities import PythonREPL
 from langgraph.graph import StateGraph, MessagesState, START, END
-from langgraph.prebuilt.chat_agent_executor import create_react_agent
+from langchain.agents.react.agent import create_react_agent
 from dotenv import load_dotenv
 import os
 from pydantic import BaseModel
