@@ -7,3 +7,4 @@ langchain-community
 langchain-experimental
 langchain-anthropic
 langgraph
+uvicorn
