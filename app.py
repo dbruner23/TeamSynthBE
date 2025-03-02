@@ -17,7 +17,11 @@ app.config['DEBUG'] = True
 app.config['PROPAGATE_EXCEPTIONS'] = True
 # Enable full error reporting
 app.config['FLASK_DEBUG'] = 1
-CORS(app, origins=["http://localhost:4300", "http://localhost:5173"])
+CORS(app, 
+     origins=["https://team-synth-fe-git-main-dbruner23s-projects.vercel.app", "http://localhost:4300", "http://localhost:5173"],
+     allow_headers=["Content-Type", "X-Session-ID", "Accept"],
+     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+     expose_headers=["Content-Type", "X-Session-ID"])
 
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', os.urandom(24))
 session_manager = SessionManager()
