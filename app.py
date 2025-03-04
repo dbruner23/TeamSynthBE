@@ -38,8 +38,12 @@ session_manager = SessionManager()
 def get_session_id():
     """Get or create a session ID from the request."""
     session_id = request.headers.get('X-Session-ID')
+    print(f"\n[DEBUG] Received X-Session-ID header: {session_id}")
+    
     if not session_id:
         session_id = str(uuid.uuid4())
+        print(f"\n[DEBUG] Generated new session ID: {session_id}")
+    
     return session_id
 
 @app.route('/api/agents', methods=['POST'])
@@ -61,7 +65,9 @@ async def create_agent():
                 }
             }
             print(f"\n[DEBUG] Agent creation failed: {error_msg}")
-            return jsonify(error_msg), 400
+            response = jsonify(error_msg)
+            response.headers['X-Session-ID'] = session_id
+            return response, 400
 
         agent_type = AgentType(data['agent_type'])
 
@@ -79,15 +85,20 @@ async def create_agent():
 
         graph_manager.add_agent(agent)
 
-        return jsonify({
+        response = jsonify({
             'id': agent.id,
             'agent_type': agent.agent_type,
             'system_prompt': data["system_prompt"],
             'relationships': [vars(rel) for rel in agent.relationships],
-            'session_id': session_id  # Return the session ID to the client
+            'session_id': session_id
         })
+        response.headers['X-Session-ID'] = session_id
+        return response
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        error_response = jsonify({'error': str(e)})
+        error_response.headers['X-Session-ID'] = session_id
+        return error_response, 400
 
 @app.route('/api/cancel', methods=['POST'])
 def cancel_task():
@@ -160,7 +171,7 @@ def get_agents():
     session_id = get_session_id()
     graph_manager = session_manager.get_or_create_manager(session_id)
 
-    return jsonify({
+    response = jsonify({
         'agents': [
             {
                 'id': agent.id,
@@ -169,8 +180,10 @@ def get_agents():
             }
             for agent in graph_manager.agents.values()
         ],
-        'session_id': session_id  # Return the session ID to the client
+        'session_id': session_id
     })
+    response.headers['X-Session-ID'] = session_id
+    return response
 
 @app.route('/api/set_api_key', methods=['POST'])
 def set_api_key():
@@ -192,10 +205,13 @@ def set_api_key():
             return jsonify({'error': 'Failed to initialize LLM after setting API key'}), 500
             
         print(f"\n[DEBUG] API key set successfully for session {session_id}")
-        return jsonify({
+        response = jsonify({
             'message': 'API key updated successfully',
             'session_id': session_id
         })
+        # Add session ID to response headers
+        response.headers['X-Session-ID'] = session_id
+        return response
     except Exception as e:
         print(f"\n[DEBUG] Error setting API key: {str(e)}")
         return jsonify({'error': str(e)}), 500
