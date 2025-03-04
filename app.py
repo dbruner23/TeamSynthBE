@@ -19,7 +19,7 @@ app.config['PROPAGATE_EXCEPTIONS'] = True
 app.config['FLASK_DEBUG'] = 1
 CORS(app, 
      origins=["https://team-synth-fe-git-main-dbruner23s-projects.vercel.app", "http://localhost:4300", "http://localhost:5173"],
-     allow_headers=["Content-Type", "X-Session-ID", "Accept"],
+     allow_headers=["Content-Type", "content-type", "X-Session-ID", "Accept"],
      methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
      expose_headers=["Content-Type", "X-Session-ID"])
 
