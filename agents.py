@@ -125,22 +125,32 @@ class AgentGraphManager:
         self.agents: Dict[str, Agent] = {}
         self.graph = None
         self.members: List[str] = []  # Track non-supervisor agents
-        self.llm = ChatAnthropic(
-            model_name="claude-3-5-sonnet-latest",
-            api_key=ANTHROPIC_API_KEY,
-            timeout=None,
-            stop=None
-        )
+        self.llm = None  # Initialize as None
         self.current_parsed_data = None  # Add this line to track latest parsed data
+        
+        # Only initialize LLM if API key is available
+        if ANTHROPIC_API_KEY:
+            self.llm = ChatAnthropic(
+                model_name="claude-3-5-sonnet-latest",
+                api_key=ANTHROPIC_API_KEY,
+                timeout=None,
+                stop=None
+            )
 
     def update_api_key(self, api_key: str) -> None:
         """Update the API key for the LLM."""
-        self.llm = ChatAnthropic(
-            model_name="claude-3-5-sonnet-latest",
-            api_key=api_key,
-            timeout=None,
-            stop=None
-        )
+        print(f"\n[DEBUG] Updating LLM with new API key")
+        try:
+            self.llm = ChatAnthropic(
+                model_name="claude-3-5-sonnet-latest",
+                api_key=api_key,
+                timeout=None,
+                stop=None
+            )
+            print(f"\n[DEBUG] LLM updated successfully")
+        except Exception as e:
+            print(f"\n[DEBUG] Error updating LLM: {str(e)}")
+            raise
 
     def _get_supervisor(self) -> Optional[Agent]:
         """Find and return the supervisor agent if it exists."""

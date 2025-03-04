@@ -18,9 +18,11 @@ class SessionManager:
         self.cleanup_expired_sessions()
 
         if session_id not in self.graph_managers:
+            print(f"\n[DEBUG] Creating new graph manager for session {session_id}")
             self.graph_managers[session_id] = AgentGraphManager()
             # If we have an API key for this session, set it
             if api_key := self.get_api_key(session_id):
+                print(f"\n[DEBUG] Found existing API key for new graph manager")
                 self.graph_managers[session_id].update_api_key(api_key)
 
         self.last_accessed[session_id] = datetime.now()
@@ -59,10 +61,15 @@ class SessionManager:
 
     def set_api_key(self, session_id: str, api_key: str) -> None:
         """Set the API key for a session."""
+        print(f"\n[DEBUG] Setting API key in session manager for session {session_id}")
         self.api_keys[session_id] = api_key
         if session_id in self.graph_managers:
+            print(f"\n[DEBUG] Updating existing graph manager with new API key")
             self.graph_managers[session_id].update_api_key(api_key)
+        print(f"\n[DEBUG] API key set successfully in session manager")
 
     def get_api_key(self, session_id: str) -> str:
         """Get the API key for a session."""
-        return self.api_keys.get(session_id)
+        api_key = self.api_keys.get(session_id)
+        print(f"\n[DEBUG] Retrieved API key for session {session_id}: {'Present' if api_key else 'Not found'}")
+        return api_key

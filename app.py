@@ -49,6 +49,20 @@ async def create_agent():
         session_id = get_session_id()
         graph_manager = session_manager.get_or_create_manager(session_id)
 
+        # Check if API key is available with more detailed error
+        if not graph_manager.llm:
+            api_key = session_manager.get_api_key(session_id)
+            error_msg = {
+                'error': 'No API key available or LLM not initialized',
+                'details': {
+                    'session_id': session_id,
+                    'has_api_key': bool(api_key),
+                    'has_llm': bool(graph_manager.llm)
+                }
+            }
+            print(f"\n[DEBUG] Agent creation failed: {error_msg}")
+            return jsonify(error_msg), 400
+
         agent_type = AgentType(data['agent_type'])
 
         # Process relationships if provided, otherwise use empty list
@@ -168,14 +182,22 @@ def set_api_key():
         if not api_key:
             return jsonify({'error': 'No API key provided'}), 400
 
+        print(f"\n[DEBUG] Setting API key for session {session_id}")
         # Store the API key in the session manager
         session_manager.set_api_key(session_id, api_key)
-
+        
+        # Get the manager to verify the key was set
+        graph_manager = session_manager.get_or_create_manager(session_id)
+        if not graph_manager.llm:
+            return jsonify({'error': 'Failed to initialize LLM after setting API key'}), 500
+            
+        print(f"\n[DEBUG] API key set successfully for session {session_id}")
         return jsonify({
             'message': 'API key updated successfully',
             'session_id': session_id
         })
     except Exception as e:
+        print(f"\n[DEBUG] Error setting API key: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
