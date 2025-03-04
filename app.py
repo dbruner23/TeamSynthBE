@@ -163,15 +163,18 @@ def set_api_key():
     try:
         data = request.json
         api_key = data.get('api_key')
+        session_id = get_session_id()
 
         if not api_key:
             return jsonify({'error': 'No API key provided'}), 400
 
-        # Update the API key in the agents module
-        global ANTHROPIC_API_KEY
-        ANTHROPIC_API_KEY = api_key
+        # Store the API key in the session manager
+        session_manager.set_api_key(session_id, api_key)
 
-        return jsonify({'message': 'API key updated successfully'})
+        return jsonify({
+            'message': 'API key updated successfully',
+            'session_id': session_id
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

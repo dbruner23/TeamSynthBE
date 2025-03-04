@@ -133,6 +133,15 @@ class AgentGraphManager:
         )
         self.current_parsed_data = None  # Add this line to track latest parsed data
 
+    def update_api_key(self, api_key: str) -> None:
+        """Update the API key for the LLM."""
+        self.llm = ChatAnthropic(
+            model_name="claude-3-5-sonnet-latest",
+            api_key=api_key,
+            timeout=None,
+            stop=None
+        )
+
     def _get_supervisor(self) -> Optional[Agent]:
         """Find and return the supervisor agent if it exists."""
         return next(
