@@ -1,4 +1,4 @@
-flask
+flask[async]
 flask-cors
 flask-session
 python-dotenv
@@ -9,3 +9,4 @@ langchain-anthropic
 langgraph
 matplotlib
 gunicorn
+asgiref
