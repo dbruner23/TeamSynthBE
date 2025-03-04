@@ -10,8 +10,7 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
 from langchain_experimental.utilities import PythonREPL
 from langgraph.graph import StateGraph, MessagesState, START, END
-from langchain.agents.react.agent import create_react_agent
-from dotenv import load_dotenv
+from langgraph.prebuilt import create_react_agent
 import os
 from pydantic import BaseModel
 from typing import Literal
@@ -127,7 +126,7 @@ class AgentGraphManager:
         self.members: List[str] = []  # Track non-supervisor agents
         self.llm = None  # Initialize as None
         self.current_parsed_data = None  # Add this line to track latest parsed data
-        
+
         # Only initialize LLM if API key is available
         if ANTHROPIC_API_KEY:
             self.llm = ChatAnthropic(
@@ -339,7 +338,7 @@ For each interaction:
         base_agent = create_react_agent(
             self.llm,
             tools=agent.tools,
-            state_modifier=agent.system_prompt
+            prompt=agent.system_prompt
         )
 
         def node_func(state: MessagesState) -> Command:
