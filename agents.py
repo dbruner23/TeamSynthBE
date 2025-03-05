@@ -469,12 +469,42 @@ For each interaction:
                         yield step_data
                         self.current_parsed_data = None  # Reset after yielding
 
-        except Exception as e:
+        except MemoryError as e:
             error_data = {
                 "agent": "system",
-                "content": f"Error during task execution: {str(e)}",
+                "content": "Task failed due to insufficient memory. You can cancel this task and try again with a simpler request.",
                 "timestamp": datetime.datetime.now().isoformat(),
-                "parsed_data": None
+                "parsed_data": None,
+                "error": True,
+                "memory_error": True
             }
+            print(f"\n[ERROR] Memory error during task execution: {str(e)}")
+            yield error_data
+            raise
+
+        except Exception as e:
+            error_type = type(e).__name__
+            error_msg = str(e)
+            print(f"\n[ERROR] Error during task execution: {error_type}: {error_msg}")
+            
+            # Check if it's a memory-related error that we can detect
+            if "SystemExit" in error_type or "out of memory" in error_msg.lower():
+                error_data = {
+                    "agent": "system",
+                    "content": "Task failed due to insufficient memory. You can cancel this task and try again with a simpler request.",
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "parsed_data": None,
+                    "error": True,
+                    "memory_error": True
+                }
+            else:
+                error_data = {
+                    "agent": "system",
+                    "content": f"Error during task execution: {error_type}: {error_msg}",
+                    "timestamp": datetime.datetime.now().isoformat(),
+                    "parsed_data": None,
+                    "error": True
+                }
+            
             yield error_data
             raise

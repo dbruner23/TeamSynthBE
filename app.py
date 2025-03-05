@@ -105,12 +105,19 @@ def cancel_task():
     try:
         session_id = get_session_id()
         session_manager.cancel_task(session_id)
+        session_manager.reset_task_state(session_id)
+        
+        print(f"\n[DEBUG] Task cancelled and reset for session {session_id}")
+        
         return jsonify({
             'agent': 'system',
             'content': 'Task cancelled',
-            'timestamp': datetime.datetime.now().isoformat()
+            'timestamp': datetime.datetime.now().isoformat(),
+            'status': 'cancelled',
+            'ready_for_new_task': True
         })
     except Exception as e:
+        print(f"\n[ERROR] Error cancelling task: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/execute', methods=['POST'])
@@ -124,35 +131,110 @@ async def execute_task():
             return jsonify({'error': 'No task provided'}), 400
 
         def generate():
-            graph_manager = session_manager.get_or_create_manager(session_id)
-            session_manager.start_task(session_id)
+            try:
+                graph_manager = session_manager.get_or_create_manager(session_id)
+                session_manager.start_task(session_id)
 
-            def stream_results():
-                async def async_generator():
+                def stream_results():
+                    async def async_generator():
+                        try:
+                            async for step in graph_manager.execute_task(task, session_id):
+                                if not session_manager.is_task_active(session_id):
+                                    yield f"data: {json.dumps({'agent': 'system', 'content': 'Task cancelled', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                                    break
+                                print(f"\n[{step['timestamp']}] Agent {step['agent']}:")
+                                print(f"{step['content']}\n")
+                                print("-" * 80)
+                                yield f"data: {json.dumps(step)}\n\n"
+                        except Exception as e:
+                            error_message = str(e)
+                            print(f"\n[ERROR] Task execution error: {error_message}")
+                            error_data = {
+                                'agent': 'system', 
+                                'content': f'Error: {error_message}',
+                                'timestamp': datetime.datetime.now().isoformat(),
+                                'error': True
+                            }
+                            yield f"data: {json.dumps(error_data)}\n\n"
+                        finally:
+                            # Always ensure task is marked as complete/cancelled
+                            session_manager.cancel_task(session_id)
+                            session_manager.reset_task_state(session_id)
+
+                    loop = None
                     try:
-                        async for step in graph_manager.execute_task(task, session_id):
-                            if not session_manager.is_task_active(session_id):
-                                yield f"data: {json.dumps({'agent': 'system', 'content': 'Task cancelled', 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        async_gen = async_generator()
+                        
+                        while True:
+                            try:
+                                yield loop.run_until_complete(async_gen.__anext__())
+                            except StopAsyncIteration:
                                 break
-                            print(f"\n[{step['timestamp']}] Agent {step['agent']}:")
-                            print(f"{step['content']}\n")
-                            print("-" * 80)
-                            yield f"data: {json.dumps(step)}\n\n"
-                    except Exception as e:
-                        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+                            except MemoryError:
+                                # Explicitly handle memory errors
+                                memory_error_data = {
+                                    'agent': 'system',
+                                    'content': 'Task failed due to insufficient memory. You can cancel this task and try again with a simpler request.',
+                                    'timestamp': datetime.datetime.now().isoformat(),
+                                    'error': True,
+                                    'memory_error': True
+                                }
+                                yield f"data: {json.dumps(memory_error_data)}\n\n"
+                                # Clean up resources and cancel the task
+                                session_manager.cancel_task(session_id)
+                                session_manager.reset_task_state(session_id)
+                                break
+                            except Exception as e:
+                                # Handle other unexpected errors during execution
+                                error_type = type(e).__name__
+                                error_msg = str(e)
+                                print(f"\n[ERROR] Error in execute_task: {error_type}: {error_msg}")
+                                
+                                # Check if it's a memory-related error (could be system exit from OOM killer)
+                                if "SystemExit" in error_type or "MemoryError" in error_type or "out of memory" in error_msg.lower():
+                                    memory_error_data = {
+                                        'agent': 'system',
+                                        'content': 'Task failed due to insufficient memory. You can cancel this task and try again with a simpler request.',
+                                        'timestamp': datetime.datetime.now().isoformat(),
+                                        'error': True,
+                                        'memory_error': True
+                                    }
+                                    yield f"data: {json.dumps(memory_error_data)}\n\n"
+                                else:
+                                    general_error_data = {
+                                        'agent': 'system',
+                                        'content': f'Unexpected error: {error_type}: {error_msg}',
+                                        'timestamp': datetime.datetime.now().isoformat(),
+                                        'error': True
+                                    }
+                                    yield f"data: {json.dumps(general_error_data)}\n\n"
+                                
+                                # Always ensure task is cancelled on error
+                                session_manager.cancel_task(session_id)
+                                session_manager.reset_task_state(session_id)
+                                break
                     finally:
-                        session_manager.cancel_task(session_id)
+                        # Clean up the event loop resources
+                        if loop:
+                            try:
+                                loop.close()
+                            except Exception as e:
+                                print(f"\n[ERROR] Error closing event loop: {str(e)}")
 
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                async_gen = async_generator()
-                while True:
-                    try:
-                        yield loop.run_until_complete(async_gen.__anext__())
-                    except StopAsyncIteration:
-                        break
-
-            return stream_results()
+                return stream_results()
+            except Exception as e:
+                # Handle initialization errors
+                error_type = type(e).__name__
+                error_msg = str(e)
+                print(f"\n[ERROR] Error initializing task: {error_type}: {error_msg}")
+                
+                # Always ensure task is cancelled on error
+                session_manager.cancel_task(session_id)
+                session_manager.reset_task_state(session_id)
+                
+                return f"data: {json.dumps({'agent': 'system', 'content': f'Error initializing task: {error_msg}', 'error': True, 'timestamp': datetime.datetime.now().isoformat()})}\n\n"
 
         return Response(
             generate(),
@@ -164,7 +246,20 @@ async def execute_task():
             }
         )
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"\n[ERROR] Exception in execute_task route: {error_type}: {error_msg}")
+        
+        # Ensure task is cancelled if an exception occurs
+        if 'session_id' in locals():
+            session_manager.cancel_task(session_id)
+            session_manager.reset_task_state(session_id)
+            
+        return jsonify({
+            'error': str(e),
+            'error_type': error_type,
+            'recoverable': True  # Allow frontend to retry
+        }), 500
 
 @app.route('/api/agents', methods=['GET'])
 def get_agents():
@@ -184,6 +279,41 @@ def get_agents():
     })
     response.headers['X-Session-ID'] = session_id
     return response
+
+@app.route('/api/reset_session', methods=['POST'])
+def reset_session():
+    """Reset a session that has experienced errors, particularly memory errors.
+    
+    This endpoint allows the frontend to force a complete recreation of the session's 
+    graph manager, which can help recover from severe errors including memory issues.
+    """
+    try:
+        session_id = get_session_id()
+        
+        # Cancel any active task first
+        session_manager.cancel_task(session_id)
+        
+        # Use the more aggressive recovery method
+        session_manager.force_recreate_manager(session_id)
+        
+        print(f"\n[DEBUG] Session {session_id} has been fully reset")
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Session has been reset successfully. You may now start a new task.',
+            'session_id': session_id,
+            'timestamp': datetime.datetime.now().isoformat()
+        })
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        print(f"\n[ERROR] Error resetting session: {error_type}: {error_msg}")
+        return jsonify({
+            'status': 'error',
+            'error': error_msg,
+            'error_type': error_type,
+            'timestamp': datetime.datetime.now().isoformat()
+        }), 500
 
 @app.route('/api/set_api_key', methods=['POST'])
 def set_api_key():
