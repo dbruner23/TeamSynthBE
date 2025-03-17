@@ -130,7 +130,7 @@ class AgentGraphManager:
         # Only initialize LLM if API key is available
         if ANTHROPIC_API_KEY:
             self.llm = ChatAnthropic(
-                model_name="claude-3-5-sonnet-latest",
+                model_name="claude-3-7-sonnet-20250219",
                 api_key=ANTHROPIC_API_KEY,
                 timeout=None,
                 stop=None
@@ -141,7 +141,7 @@ class AgentGraphManager:
         print(f"\n[DEBUG] Updating LLM with new API key")
         try:
             self.llm = ChatAnthropic(
-                model_name="claude-3-5-sonnet-latest",
+                model_name="claude-3-7-sonnet-20250219",
                 api_key=api_key,
                 timeout=None,
                 stop=None
