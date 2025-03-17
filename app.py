@@ -23,6 +23,7 @@ CORS(app,
      resources={r"/api/*": {
          "origins": [
              "https://team-synth-fe-git-main-dbruner23s-projects.vercel.app",
+             "https://team-synth-fe-eta.vercel.app",
              "http://localhost:4300",
              "http://localhost:5173"
          ],
